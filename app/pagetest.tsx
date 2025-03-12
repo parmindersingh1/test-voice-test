@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Mic, MicOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 
 // Mock responses for demonstration
@@ -27,8 +27,6 @@ export default function Home() {
   const recognitionRef = useRef<any>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const [audioLevel, setAudioLevel] = useState(0);
-  const analyserRef = useRef<AnalyserNode | null>(null);
 
   const getMockResponse = () => {
     return mockResponses[Math.floor(Math.random() * mockResponses.length)];
@@ -184,27 +182,6 @@ export default function Home() {
             const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
             const audioContext = new AudioContext();
             audioContextRef.current = audioContext;
-            
-            // Create analyser node
-            const analyser = audioContext.createAnalyser();
-            analyserRef.current = analyser;
-            analyser.fftSize = 32;
-            
-            // Create media stream source
-            const source = audioContext.createMediaStreamSource(stream);
-            source.connect(analyser);
-            
-            // Start animation frame for visualization
-            const dataArray = new Uint8Array(analyser.frequencyBinCount);
-            const updateAudioLevel = () => {
-              if (isListening) {
-                analyser.getByteFrequencyData(dataArray);
-                const level = Math.max(...dataArray) / 255;
-                setAudioLevel(level);
-                requestAnimationFrame(updateAudioLevel);
-              }
-            };
-            updateAudioLevel();
             
             // Create media recorder for raw PCM data
             const options = { mimeType: 'audio/webm' }; // Still using webm for recording
@@ -366,99 +343,56 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800 p-4 flex items-center justify-center">
-      <Card className="w-full max-w-md p-0 overflow-hidden shadow-lg">
-        <CardHeader className="bg-gradient-to-r from-blue-600 to-purple-600 p-6">
-          <div className="text-center space-y-2">
-            <CardTitle className="text-3xl font-bold text-white">Voice Assistant</CardTitle>
-            <CardDescription className="text-gray-200">
-              {isListening ? 'Listening... Speak now' : 'Click to start your voice interaction'}
-            </CardDescription>
-          </div>
-        </CardHeader>
+      <Card className="w-full max-w-md p-6 space-y-6">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold mb-2">Voice Assistant</h1>
+          <p className="text-sm text-muted-foreground">
+            {isListening ? 'Listening... Speak now' : 'Click the microphone to start'}
+          </p>
+        </div>
 
-        <div className="p-6 space-y-6">
-          <div className="flex flex-col items-center gap-4">
-            <Button
-              size="lg"
-              className={`w-20 h-20 rounded-full transition-all duration-300 relative overflow-hidden ${
-                isListening 
-                  ? 'bg-red-500 hover:bg-red-600 shadow-lg scale-110' 
-                  : 'bg-blue-600 hover:bg-blue-700'
-              }`}
-              onClick={startListening}
-            >
-              {isListening && (
-                <div 
-                  className="absolute inset-0 animate-spark"
-                  style={{
-                    background: `radial-gradient(circle at center, rgba(255,255,255,0.8) 0%, transparent 70%)`,
-                    transform: `scale(${1 + audioLevel * 0.5})`,
-                    opacity: audioLevel,
-                    transition: 'all 0.1s ease-out'
-                  }}
-                />
-              )}
-              {isListening ? (
-                <MicOff className="w-8 h-8 text-white relative z-10" />
-              ) : (
-                <Mic className="w-8 h-8 text-white relative z-10" />
-              )}
-            </Button>
-            
-            {isListening && (
-              <div className="w-full h-4 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-blue-500 transition-all duration-50"
-                  style={{ width: `${audioLevel * 100}%` }}
-                />
-              </div>
+        <div className="flex flex-col items-center gap-4">
+          <Button
+            size="lg"
+            className={`w-16 h-16 rounded-full transition-colors duration-200 ${
+              isListening ? 'bg-red-500 hover:bg-red-600' : ''
+            }`}
+            onClick={startListening}
+          >
+            {isListening ? (
+              <MicOff className="w-6 h-6" />
+            ) : (
+              <Mic className="w-6 h-6" />
             )}
-            
-            {transcript && (
-              <div className="w-full p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-                <p className="font-medium text-gray-600 dark:text-gray-300">You said:</p>
-                <p className="text-sm text-gray-800 dark:text-gray-100 mt-1">{transcript}</p>
-              </div>
-            )}
-            
-            {response && (
-              <div className="w-full p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
-                <p className="font-medium text-blue-600 dark:text-blue-300">Assistant:</p>
-                <p className="text-sm text-blue-800 dark:text-blue-100 mt-1">{response}</p>
-              </div>
-            )}
-            
-            {audioUrl && (
-              <div className="w-full p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-                <p className="font-medium text-gray-600 dark:text-gray-300 mb-2">Recorded Audio (WAV):</p>
-                <div className="flex items-center gap-3">
-                  <audio controls src={audioUrl} className="w-full" />
-                  <button 
-                    onClick={handleDownload}
-                    className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors"
-                    title="Download audio"
-                  >
-                    <svg 
-                      xmlns="http://www.w3.org/2000/svg" 
-                      width="24" 
-                      height="24" 
-                      viewBox="0 0 24 24" 
-                      fill="none" 
-                      stroke="currentColor" 
-                      strokeWidth="2" 
-                      strokeLinecap="round" 
-                      strokeLinejoin="round"
-                      className="w-5 h-5 text-gray-600 dark:text-gray-300"
-                    >
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                      <polyline points="7 10 12 15 17 10"/>
-                      <line x1="12" y1="15" x2="12" y2="3"/>
-                    </svg>
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
+          </Button>
+          
+          {transcript && (
+            <div className="w-full p-4 bg-muted rounded-lg">
+              <p className="font-medium">You said:</p>
+              <p className="text-sm">{transcript}</p>
+            </div>
+          )}
+          
+          {response && (
+            <div className="w-full p-4 bg-primary/10 rounded-lg">
+              <p className="font-medium">Assistant:</p>
+              <p className="text-sm">{response}</p>
+            </div>
+          )}
+          
+          {audioUrl && (
+            <div className="w-full p-4 bg-muted rounded-lg">
+              <p className="font-medium mb-2">Recorded Audio (WAV):</p>
+              <audio controls src={audioUrl} className="w-full mb-2" />
+              <Button 
+                onClick={handleDownload}
+                className="w-full"
+                variant="outline"
+              >
+                Download WAV Audio
+              </Button>
+            </div>
+          )}
         </div>
       </Card>
     </div>
