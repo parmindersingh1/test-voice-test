@@ -317,6 +317,7 @@ export default function Home() {
           mediaRecorderRef.current.stop();
         }
         
+        
         // Stop microphone stream
         if (streamRef.current) {
           streamRef.current.getTracks().forEach(track => track.stop());
