@@ -5,6 +5,7 @@ import { Mic, MicOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
+import { motion, AnimatePresence } from 'framer-motion';
 
 // Mock responses for demonstration
 const mockResponses = [
@@ -29,6 +30,8 @@ export default function Home() {
   const streamRef = useRef<MediaStream | null>(null);
   const [audioLevel, setAudioLevel] = useState(0);
   const analyserRef = useRef<AnalyserNode | null>(null);
+  const [elapsedTime, setElapsedTime] = useState(0);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   const getMockResponse = () => {
     return mockResponses[Math.floor(Math.random() * mockResponses.length)];
@@ -152,6 +155,19 @@ export default function Home() {
     }
   };
 
+  const startTimer = () => {
+    setElapsedTime(0);
+    timerRef.current = setInterval(() => {
+      setElapsedTime(prev => prev + 1);
+    }, 1000);
+  };
+
+  const stopTimer = () => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+  };
+
   const startListening = () => {
     // If already listening, stop the recognition
     if (isListening) {
@@ -160,6 +176,7 @@ export default function Home() {
       if (recognitionRef.current) {
         recognitionRef.current.stop();
       }
+      stopTimer();
       return;
     }
 
@@ -275,6 +292,7 @@ export default function Home() {
         setIsListening(true);
         setTranscript('');
         setResponse('');
+        startTimer();
         toast({
           title: 'Listening',
           description: 'Speak now...',
@@ -311,6 +329,7 @@ export default function Home() {
 
       recognition.onend = () => {
         setIsListening(false);
+        stopTimer();
         
         // Stop media recorder
         if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
@@ -368,101 +387,158 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800 p-4 flex items-center justify-center">
-      <Card className="w-full max-w-md p-0 overflow-hidden shadow-lg">
-        <CardHeader className="bg-gradient-to-r from-blue-600 to-purple-600 p-6">
-          <div className="text-center space-y-2">
-            <CardTitle className="text-3xl font-bold text-white">Voice Assistant</CardTitle>
-            <CardDescription className="text-gray-200">
-              {isListening ? 'Listening... Speak now' : 'Click to start your voice interaction'}
-            </CardDescription>
-          </div>
-        </CardHeader>
-
-        <div className="p-6 space-y-6">
-          <div className="flex flex-col items-center gap-4">
-            <Button
-              size="lg"
-              className={`w-20 h-20 rounded-full transition-all duration-300 relative overflow-hidden ${
-                isListening 
-                  ? 'bg-red-500 hover:bg-red-600 shadow-lg scale-110' 
-                  : 'bg-blue-600 hover:bg-blue-700'
-              }`}
-              onClick={startListening}
-            >
-              {isListening && (
-                <div 
-                  className="absolute inset-0 animate-spark"
-                  style={{
-                    background: `radial-gradient(circle at center, rgba(255,255,255,0.8) 0%, transparent 70%)`,
-                    transform: `scale(${1 + audioLevel * 0.5})`,
-                    opacity: audioLevel,
-                    transition: 'all 0.1s ease-out'
-                  }}
-                />
-              )}
-              {isListening ? (
-                <MicOff className="w-8 h-8 text-white relative z-10" />
-              ) : (
-                <Mic className="w-8 h-8 text-white relative z-10" />
-              )}
-            </Button>
-            
-            {isListening && (
-              <div className="w-full h-4 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-blue-500 transition-all duration-50"
-                  style={{ width: `${audioLevel * 100}%` }}
-                />
-              </div>
-            )}
-            
-            {transcript && (
-              <div className="w-full p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-                <p className="font-medium text-gray-600 dark:text-gray-300">You said:</p>
-                <p className="text-sm text-gray-800 dark:text-gray-100 mt-1">{transcript}</p>
-              </div>
-            )}
-            
-            {response && (
-              <div className="w-full p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
-                <p className="font-medium text-blue-600 dark:text-blue-300">Assistant:</p>
-                <p className="text-sm text-blue-800 dark:text-blue-100 mt-1">{response}</p>
-              </div>
-            )}
-            
-            {audioUrl && (
-              <div className="w-full p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-                <p className="font-medium text-gray-600 dark:text-gray-300 mb-2">Recorded Audio (WAV):</p>
-                <div className="flex items-center gap-3">
-                  <audio controls src={audioUrl} className="w-full" />
-                  <button 
-                    onClick={handleDownload}
-                    className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors"
-                    title="Download audio"
+      <motion.div 
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        transition={{ duration: 0.3 }}
+        className="w-full max-w-md"
+      >
+        <Card className="w-full p-0 overflow-hidden shadow-lg border border-gray-200/50 dark:border-gray-700/50">
+          <CardHeader className="bg-gradient-to-r from-blue-600 to-purple-600 p-8">
+            <div className="text-center space-y-3">
+              <CardTitle className="text-3xl font-bold text-white drop-shadow-md">Voice Assistant</CardTitle>
+              <CardDescription className="text-gray-200/90 text-sm">
+                {isListening ? (
+                  <motion.span
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ repeat: Infinity, duration: 1.5 }}
                   >
-                    <svg 
-                      xmlns="http://www.w3.org/2000/svg" 
-                      width="24" 
-                      height="24" 
-                      viewBox="0 0 24 24" 
-                      fill="none" 
-                      stroke="currentColor" 
-                      strokeWidth="2" 
-                      strokeLinecap="round" 
-                      strokeLinejoin="round"
-                      className="w-5 h-5 text-gray-600 dark:text-gray-300"
-                    >
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                      <polyline points="7 10 12 15 17 10"/>
-                      <line x1="12" y1="15" x2="12" y2="3"/>
-                    </svg>
-                  </button>
+                    Listening... Speak now
+                  </motion.span>
+                ) : (
+                  'Click to start your voice interaction'
+                )}
+              </CardDescription>
+            </div>
+          </CardHeader>
+
+          <div className="p-8 space-y-8">
+            <div className="flex flex-col items-center gap-6">
+              <motion.div
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                className="relative"
+              >
+                <Button
+                  size="lg"
+                  className={`w-24 h-24 rounded-full transition-all duration-300 relative overflow-hidden ${
+                    isListening 
+                      ? 'bg-red-500 hover:bg-red-600 shadow-lg scale-110 ring-4 ring-red-500/30' 
+                      : 'bg-blue-600 hover:bg-blue-700 ring-4 ring-blue-600/30'
+                  }`}
+                  onClick={startListening}
+                >
+                  {isListening && (
+                    <motion.div 
+                      className="absolute inset-0 animate-spark"
+                      style={{
+                        background: `radial-gradient(circle at center, rgba(255,255,255,0.8) 0%, transparent 70%)`,
+                        transform: `scale(${1 + audioLevel * 0.5})`,
+                        opacity: audioLevel,
+                      }}
+                      animate={{ rotate: 360 }}
+                      transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                    />
+                  )}
+                  {isListening ? (
+                    <MicOff className="w-10 h-10 text-white relative z-10" />
+                  ) : (
+                    <Mic className="w-10 h-10 text-white relative z-10" />
+                  )}
+                </Button>
+              </motion.div>
+              
+              {isListening && (
+                <div className="w-full space-y-3">
+                  <div className="text-center text-sm text-gray-600 dark:text-gray-300 font-medium">
+                    Elapsed Time: {Math.floor(elapsedTime / 60)}:{String(elapsedTime % 60).padStart(2, '0')}
+                  </div>
+                  <motion.div 
+                    className="w-full h-3 bg-gray-200/50 dark:bg-gray-700/50 rounded-full overflow-hidden"
+                    initial={{ scaleX: 0 }}
+                    animate={{ scaleX: 1 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    <div
+                      className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-50"
+                      style={{ width: `${audioLevel * 100}%` }}
+                    />
+                  </motion.div>
                 </div>
-              </div>
-            )}
+              )}
+              
+              <AnimatePresence>
+                {transcript && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 20 }}
+                    className="w-full p-5 bg-gray-50/80 dark:bg-gray-800/80 backdrop-blur-sm rounded-lg border border-gray-200/50 dark:border-gray-700/50"
+                  >
+                    <p className="font-medium text-gray-600 dark:text-gray-300">You said:</p>
+                    <p className="text-sm text-gray-800 dark:text-gray-100 mt-1.5 leading-relaxed">{transcript}</p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+              
+              <AnimatePresence>
+                {response && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 20 }}
+                    className="w-full p-5 bg-blue-50/80 dark:bg-blue-900/20 backdrop-blur-sm rounded-lg border border-blue-200/50 dark:border-blue-800/50"
+                  >
+                    <p className="font-medium text-blue-600 dark:text-blue-300">Assistant:</p>
+                    <p className="text-sm text-blue-800 dark:text-blue-100 mt-1.5 leading-relaxed">{response}</p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+              
+              <AnimatePresence>
+                {audioUrl && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 20 }}
+                    className="w-full p-5 bg-gray-50/80 dark:bg-gray-800/80 backdrop-blur-sm rounded-lg border border-gray-200/50 dark:border-gray-700/50"
+                  >
+                    <p className="font-medium text-gray-600 dark:text-gray-300 mb-3">Recorded Audio (WAV):</p>
+                    <div className="flex items-center gap-3">
+                      <audio controls src={audioUrl} className="w-full" />
+                      <motion.button 
+                        whileHover={{ scale: 1.1 }}
+                        whileTap={{ scale: 0.9 }}
+                        onClick={handleDownload}
+                        className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors"
+                        title="Download audio"
+                      >
+                        <svg 
+                          xmlns="http://www.w3.org/2000/svg" 
+                          width="24" 
+                          height="24" 
+                          viewBox="0 0 24 24" 
+                          fill="none" 
+                          stroke="currentColor" 
+                          strokeWidth="2" 
+                          strokeLinecap="round" 
+                          strokeLinejoin="round"
+                          className="w-5 h-5 text-gray-600 dark:text-gray-300"
+                        >
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                          <polyline points="7 10 12 15 17 10"/>
+                          <line x1="12" y1="15" x2="12" y2="3"/>
+                        </svg>
+                      </motion.button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
-        </div>
-      </Card>
+        </Card>
+      </motion.div>
     </div>
   );
 }
