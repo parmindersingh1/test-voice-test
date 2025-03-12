@@ -333,6 +333,7 @@ export default function Home() {
       } catch (error) {
         handleSpeechError('not-allowed');
       }
+      
     } else {
       toast({
         title: 'Not Supported',
