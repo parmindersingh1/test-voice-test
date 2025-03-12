@@ -397,4 +397,5 @@ export default function Home() {
       </Card>
     </div>
   );
+  
 }
