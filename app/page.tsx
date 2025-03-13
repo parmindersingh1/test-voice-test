@@ -23,7 +23,7 @@ export default function Home() {
   const { toast } = useToast();
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [audioUrls, setAudioUrls] = useState<string[]>([]);
   const silenceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const recognitionRef = useRef<any>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -32,6 +32,12 @@ export default function Home() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const silenceDetectorRef = useRef<NodeJS.Timeout | null>(null);
+  const lastSpeechRef = useRef<number>(Date.now());
+  const chunkIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isProcessingRef = useRef<boolean>(false);
+  const recordingStartTimeRef = useRef<number>(0);
+  const minChunkDurationMs = 2000; // Minimum chunk duration in milliseconds
 
   const getMockResponse = () => {
     return mockResponses[Math.floor(Math.random() * mockResponses.length)];
@@ -58,6 +64,14 @@ export default function Home() {
       
       if (audioContextRef.current) {
         audioContextRef.current.close();
+      }
+
+      if (chunkIntervalRef.current) {
+        clearInterval(chunkIntervalRef.current);
+      }
+
+      if (silenceDetectorRef.current) {
+        clearInterval(silenceDetectorRef.current);
       }
     };
   }, []);
@@ -168,6 +182,76 @@ export default function Home() {
     }
   };
 
+  // Start a new recording chunk
+  const startNewChunk = () => {
+    if (!mediaRecorderRef.current || mediaRecorderRef.current.state === 'inactive') return;
+    
+    // Process existing chunks if there are any
+    if (audioChunksRef.current.length > 0) {
+      processAudioChunks();
+    }
+    
+    // Reset recording start time
+    recordingStartTimeRef.current = Date.now();
+    
+    // Stop current recording and start a new one
+    mediaRecorderRef.current.stop();
+    
+    // Small delay to ensure proper stop/start sequence
+    setTimeout(() => {
+      if (streamRef.current && isListening) {
+        try {
+          const options = { mimeType: 'audio/webm' };
+          const recorder = new MediaRecorder(streamRef.current, options);
+          mediaRecorderRef.current = recorder;
+          
+          recorder.ondataavailable = (e) => {
+            if (e.data.size > 0) {
+              audioChunksRef.current.push(e.data);
+            }
+          };
+          
+          recorder.start(100);
+        } catch (err) {
+          console.error('Error restarting recorder:', err);
+        }
+      }
+    }, 100);
+  };
+
+  // Process audio chunks and convert to WAV
+  const processAudioChunks = async () => {
+    if (isProcessingRef.current || audioChunksRef.current.length === 0) return;
+    
+    isProcessingRef.current = true;
+    
+    try {
+      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+      audioChunksRef.current = []; // Reset for next chunk
+      
+      const arrayBuffer = await audioBlob.arrayBuffer();
+      const audioContext = new AudioContext();
+      
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      const wavBlob = bufferToWav(audioBuffer, audioContext.sampleRate);
+      const url = URL.createObjectURL(wavBlob);
+      
+      setAudioUrls(prevUrls => [...prevUrls, url]);
+      
+      audioContext.close();
+      
+      // Notify user about new chunk
+      toast({
+        title: 'New Audio Chunk',
+        description: `Chunk #${audioUrls.length + 1} processed`,
+      });
+    } catch (err) {
+      console.error('Error processing audio chunk:', err);
+    } finally {
+      isProcessingRef.current = false;
+    }
+  };
+
   const startListening = () => {
     // If already listening, stop the recognition
     if (isListening) {
@@ -177,24 +261,57 @@ export default function Home() {
         recognitionRef.current.stop();
       }
       stopTimer();
+      
+      // Stop media recorder
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+      
+      // Stop microphone stream
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+
+      // Clear intervals
+      if (chunkIntervalRef.current) {
+        clearInterval(chunkIntervalRef.current);
+      }
+      
+      if (silenceDetectorRef.current) {
+        clearInterval(silenceDetectorRef.current);
+      }
+      
       return;
     }
+
+    // Add interruption handling
+    const handleInterruption = () => {
+      if (window.speechSynthesis.speaking) {
+        window.speechSynthesis.cancel();
+        setResponse('');
+        toast({
+          title: 'Interrupted',
+          description: 'Assistant stopped speaking',
+        });
+      }
+    };
 
     if ('webkitSpeechRecognition' in window) {
       const recognition = new (window as any).webkitSpeechRecognition();
       recognitionRef.current = recognition;
       recognition.continuous = true;
-      recognition.interimResults = false;
+      recognition.interimResults = true;
       recognition.lang = 'en-IN';
 
       // Reset audio data
       audioChunksRef.current = [];
-      setAudioUrl(null);
+      setAudioUrls([]);
 
       // Setup audio recording with WAV format
       navigator.mediaDevices.getUserMedia({ audio: true })
         .then(stream => {
           streamRef.current = stream;
+          recordingStartTimeRef.current = Date.now();
           
           try {
             // Initialize audio context
@@ -223,53 +340,59 @@ export default function Home() {
             };
             updateAudioLevel();
             
-            // Create media recorder for raw PCM data
-            const options = { mimeType: 'audio/webm' }; // Still using webm for recording
+            // Create media recorder
+            const options = { mimeType: 'audio/webm' };
             const recorder = new MediaRecorder(stream, options);
             mediaRecorderRef.current = recorder;
             
             recorder.ondataavailable = (e) => {
               if (e.data.size > 0) {
                 audioChunksRef.current.push(e.data);
-                console.log('Audio chunk added, total chunks:', audioChunksRef.current.length);
               }
             };
             
-            recorder.onstop = async () => {
-              console.log('MediaRecorder stopped, chunks:', audioChunksRef.current.length);
-              // Create audio blob from recorded chunks
-              if (audioChunksRef.current.length > 0) {
-                // First create a blob with the recorded data (in WebM format)
-                const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-                
-                // Convert WebM to WAV format
-                const arrayBuffer = await audioBlob.arrayBuffer();
-                const audioContext = new AudioContext();
-                
-                audioContext.decodeAudioData(arrayBuffer).then(audioBuffer => {
-                  // Convert to WAV
-                  const wavBlob = bufferToWav(audioBuffer, audioContext.sampleRate);
-                  const url = URL.createObjectURL(wavBlob);
-                  setAudioUrl(url);
-                  console.log('WAV Audio URL created:', url);
-                  
-                  // Close the temporary audio context
-                  audioContext.close();
-                }).catch(err => {
-                  console.error('Error decoding audio data:', err);
-                  toast({
-                    title: 'Error',
-                    description: 'Failed to convert audio format',
-                    variant: 'destructive',
-                  });
-                });
+            // Start recorder
+            recorder.start(100);
+            
+            // Set up silence detection to create new chunks
+            lastSpeechRef.current = Date.now();
+            
+            silenceDetectorRef.current = setInterval(() => {
+              analyser.getByteFrequencyData(dataArray);
+              const level = Math.max(...dataArray) / 255;
+              
+              // If audio level is above threshold, update last speech time
+              if (level > 0.05) {
+                lastSpeechRef.current = Date.now();
               } else {
-                console.warn('No audio chunks available when recorder stopped');
+                // If silent for more than 1 second, process the current chunk
+                const silenceDuration = Date.now() - lastSpeechRef.current;
+                const chunkDuration = Date.now() - recordingStartTimeRef.current;
+                
+                if (silenceDuration > 1000 && chunkDuration > minChunkDurationMs && audioChunksRef.current.length > 0) {
+                  processAudioChunks();
+                  // Start a new recording immediately
+                  if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+                    mediaRecorderRef.current.stop();
+                    setTimeout(() => {
+                      if (streamRef.current && isListening) {
+                        const options = { mimeType: 'audio/webm' };
+                        const recorder = new MediaRecorder(streamRef.current, options);
+                        mediaRecorderRef.current = recorder;
+                        recorder.ondataavailable = (e) => {
+                          if (e.data.size > 0) {
+                            audioChunksRef.current.push(e.data);
+                          }
+                        };
+                        recorder.start(100);
+                        recordingStartTimeRef.current = Date.now();
+                      }
+                    }, 100);
+                  }
+                }
               }
-            };
+            }, 200);
             
-            recorder.start(100); // Collect data every 100ms
-            console.log('MediaRecorder started');
           } catch (error) {
             console.error('Error setting up audio recording:', error);
             toast({
@@ -300,27 +423,58 @@ export default function Home() {
       };
 
       recognition.onresult = (event: any) => {
+        // Handle interruption if assistant is speaking
+        if (window.speechSynthesis.speaking) {
+          handleInterruption();
+        }
+
         const userText = event.results[event.results.length - 1][0].transcript;
         setTranscript(userText);
 
-        // Reset silence timeout whenever speech is detected
-        if (silenceTimeoutRef.current) {
-          clearTimeout(silenceTimeoutRef.current);
+        // Update last speech time when there's a result
+        lastSpeechRef.current = Date.now();
+
+        // Get and speak mock response only when speech is final
+        if (event.results[event.results.length - 1].isFinal) {
+          const mockResponse = getMockResponse();
+          setResponse(mockResponse);
+          
+          // Process current audio chunk when utterance is complete
+          const chunkDuration = Date.now() - recordingStartTimeRef.current;
+          if (chunkDuration > minChunkDurationMs && audioChunksRef.current.length > 0) {
+            startNewChunk();
+          }
+
+          window.speechSynthesis.cancel();
+          const speech = new SpeechSynthesisUtterance(mockResponse);
+
+          // Get available voices and filter for Indian ones
+          const voices = window.speechSynthesis.getVoices();
+          const indianVoices = voices.filter(voice => voice.lang === 'en-IN');
+
+          // Use an Indian voice if available, otherwise fallback to default
+          if (indianVoices.length > 0) {
+            // Alternate between male and female voices if both are available
+            const maleVoice = indianVoices.find(voice => voice.name.includes('Male'));
+            const femaleVoice = indianVoices.find(voice => voice.name.includes('Female'));
+            
+            if (maleVoice && femaleVoice) {
+              // Alternate between male and female voices for each response
+              speech.voice = Math.random() > 0.5 ? maleVoice : femaleVoice;
+            } else {
+              // Use whatever Indian voice is available
+              speech.voice = indianVoices[0];
+            }
+          } else {
+            // Fallback to default voice if no Indian voices are found
+            speech.voice = voices.find(voice => voice.default) || voices[0];
+          }
+
+          speech.lang = 'en-IN'; // Set to Indian English
+          speech.rate = 1;
+          speech.pitch = 1;
+          window.speechSynthesis.speak(speech);
         }
-        silenceTimeoutRef.current = setTimeout(() => {
-          recognition.stop();
-        }, 2000); // 2 seconds of silence
-
-        // Get and speak mock response
-        const mockResponse = getMockResponse();
-        setResponse(mockResponse);
-
-        window.speechSynthesis.cancel();
-        const speech = new SpeechSynthesisUtterance(mockResponse);
-        speech.lang = 'en-US';
-        speech.rate = 1;
-        speech.pitch = 1;
-        window.speechSynthesis.speak(speech);
       };
 
       recognition.onerror = (event: any) => {
@@ -328,24 +482,37 @@ export default function Home() {
       };
 
       recognition.onend = () => {
-        setIsListening(false);
-        stopTimer();
-        
-        // Stop media recorder
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-          mediaRecorderRef.current.stop();
-        }
-        
-        
-        // Stop microphone stream
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach(track => track.stop());
-        }
+        // Only stop if not manually stopped
+        if (isListening) {
+          setIsListening(false);
+          stopTimer();
+          
+          // Process any remaining audio
+          if (audioChunksRef.current.length > 0) {
+            processAudioChunks();
+          }
+          
+          if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+            mediaRecorderRef.current.stop();
+          }
+          
+          if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop());
+          }
+          
+          if (chunkIntervalRef.current) {
+            clearInterval(chunkIntervalRef.current);
+          }
+          
+          if (silenceDetectorRef.current) {
+            clearInterval(silenceDetectorRef.current);
+          }
 
-        toast({
-          title: 'Stopped',
-          description: 'Speech recognition has stopped.',
-        });
+          toast({
+            title: 'Stopped',
+            description: 'Speech recognition has stopped.',
+          });
+        }
       };
 
       try {
@@ -353,7 +520,6 @@ export default function Home() {
       } catch (error) {
         handleSpeechError('not-allowed');
       }
-      
     } else {
       toast({
         title: 'Not Supported',
@@ -363,24 +529,18 @@ export default function Home() {
     }
   };
 
-  const handleDownload = () => {
-    if (audioUrl) {
+  const handleDownload = (url: string, index: number) => {
+    if (url) {
       const link = document.createElement('a');
-      link.href = audioUrl;
-      link.download = `recording-${new Date().toISOString()}.wav`;
+      link.href = url;
+      link.download = `recording-chunk-${index}-${new Date().toISOString()}.wav`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       
       toast({
         title: 'Success',
-        description: 'Audio downloaded as WAV format',
-      });
-    } else {
-      toast({
-        title: 'Error',
-        description: 'No audio recorded. Please try speaking again.',
-        variant: 'destructive',
+        description: `Audio chunk ${index + 1} downloaded as WAV`,
       });
     }
   };
@@ -497,40 +657,45 @@ export default function Home() {
               </AnimatePresence>
               
               <AnimatePresence>
-                {audioUrl && (
+                {audioUrls.length > 0 && (
                   <motion.div
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: 20 }}
                     className="w-full p-5 bg-gray-50/80 dark:bg-gray-800/80 backdrop-blur-sm rounded-lg border border-gray-200/50 dark:border-gray-700/50"
                   >
-                    <p className="font-medium text-gray-600 dark:text-gray-300 mb-3">Recorded Audio (WAV):</p>
-                    <div className="flex items-center gap-3">
-                      <audio controls src={audioUrl} className="w-full" />
-                      <motion.button 
-                        whileHover={{ scale: 1.1 }}
-                        whileTap={{ scale: 0.9 }}
-                        onClick={handleDownload}
-                        className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors"
-                        title="Download audio"
-                      >
-                        <svg 
-                          xmlns="http://www.w3.org/2000/svg" 
-                          width="24" 
-                          height="24" 
-                          viewBox="0 0 24 24" 
-                          fill="none" 
-                          stroke="currentColor" 
-                          strokeWidth="2" 
-                          strokeLinecap="round" 
-                          strokeLinejoin="round"
-                          className="w-5 h-5 text-gray-600 dark:text-gray-300"
-                        >
-                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                          <polyline points="7 10 12 15 17 10"/>
-                          <line x1="12" y1="15" x2="12" y2="3"/>
-                        </svg>
-                      </motion.button>
+                    <p className="font-medium text-gray-600 dark:text-gray-300 mb-3">Recorded Audio Chunks:</p>
+                    <div className="space-y-4">
+                      {audioUrls.map((url, index) => (
+                        <div key={index} className="flex items-center gap-3 p-3 bg-white dark:bg-gray-700 rounded-lg">
+                          <span className="text-sm font-medium">Chunk {index + 1}</span>
+                          <audio controls src={url} className="flex-1" />
+                          <motion.button 
+                            whileHover={{ scale: 1.1 }}
+                            whileTap={{ scale: 0.9 }}
+                            onClick={() => handleDownload(url, index)}
+                            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-600 rounded-full transition-colors"
+                            title="Download audio chunk"
+                          >
+                            <svg 
+                              xmlns="http://www.w3.org/2000/svg" 
+                              width="24" 
+                              height="24" 
+                              viewBox="0 0 24 24" 
+                              fill="none" 
+                              stroke="currentColor" 
+                              strokeWidth="2" 
+                              strokeLinecap="round" 
+                              strokeLinejoin="round"
+                              className="w-5 h-5 text-gray-600 dark:text-gray-300"
+                            >
+                              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                              <polyline points="7 10 12 15 17 10"/>
+                              <line x1="12" y1="15" x2="12" y2="3"/>
+                            </svg>
+                          </motion.button>
+                        </div>
+                      ))}
                     </div>
                   </motion.div>
                 )}
